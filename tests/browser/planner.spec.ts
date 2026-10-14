@@ -1,0 +1,58 @@
+import {test,expect} from '@playwright/test';
+import {request} from '../fixtures.ts';
+test('planner shows the reference plan, preferred shortfall and explicit adjoining-zone acceptance',async({page})=>{
+  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await page.goto('/');
+  await expect(page.getByRole('heading',{name:'Make room for what’s next.'})).toBeVisible();
+  await expect(page.getByRole('button',{name:/Zone 4,.*proposed/})).toBeVisible();
+  await expect(page.getByText('10.81 m² more space needed.')).toBeVisible();
+  await page.getByRole('button',{name:/Add Zone (3|8)/}).first().click();
+  await expect(page.getByRole('main').getByText('Requires review',{exact:true})).toBeVisible();
+  await page.getByLabel('Activity name',{exact:true}).fill('Browser smoke workshop');
+  await page.getByRole('button',{name:'Save draft',exact:true}).click();
+  await expect(page.getByRole('dialog',{name:'Activity details'})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Browser smoke workshop'})).toBeVisible();
+  await page.getByLabel('Close dialog').click();await page.reload();
+  await page.getByRole('button',{name:/All bookings/}).click();await expect(page.getByText('Browser smoke workshop',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Studio settings',exact:true}).click();await expect(page.getByText('A manager’s space')).toBeVisible();
+  expect(errors).toEqual([]);
+});
+test('meeting preference and accessible zone selection work',async({page})=>{
+  await page.goto('/');await page.getByRole('button',{name:'Meeting',exact:true}).click();
+  await expect(page.getByRole('button',{name:/Zone 7,.*proposed/})).toHaveAttribute('aria-pressed','true');
+  await page.getByRole('button',{name:/Zone 8,/}).focus();await page.keyboard.press('Enter');
+  await expect(page.getByText('Your selection',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Auto-select',exact:true}).click();
+  await expect(page.getByRole('button',{name:/Zone 7,.*proposed/})).toHaveAttribute('aria-pressed','true');
+});
+test('mobile planner fits viewport and guide links open supplied files',async({page})=>{
+  await page.setViewportSize({width:390,height:844});await page.goto('/');
+  await expect(page.getByRole('heading',{name:'Make room for what’s next.'})).toBeVisible();
+  const width=await page.evaluate(()=>({body:document.body.scrollWidth,viewport:window.innerWidth}));expect(width.body).toBeLessThanOrEqual(width.viewport);
+  await page.getByRole('button',{name:'Studio guide',exact:true}).click();
+  await expect(page.getByRole('link',{name:/Explore the original floor plan/})).toHaveAttribute('href','/references/floor-plan.pdf');
+  expect((await page.request.get('/references/floor-plan.pdf')).status()).toBe(200);
+});
+test('manager can record verification, save settings and confirm a valid request',async({page})=>{
+  await page.goto('/');await page.getByLabel('Manager sign in',{exact:true}).click();
+  await page.getByLabel('Manager password',{exact:true}).fill('browser-test-password-only');
+  await page.getByRole('button',{name:'Sign in',exact:true}).click();
+  const settings=page.getByRole('dialog',{name:'Studio settings'});await expect(settings).toBeVisible();
+  await page.getByRole('spinbutton',{name:'Whole studio',exact:true}).fill('60');
+  await page.getByRole('spinbutton',{name:'Shared escape routes',exact:true}).fill('60');
+  await settings.locator('.factor-row').filter({hasText:'Meeting'}).getByRole('checkbox').check();
+  await page.getByLabel('Site assessment / approval reference',{exact:true}).fill('TEST ONLY — browser verification reference. Not an operational approval.');
+  await page.getByRole('checkbox',{name:/Site fire strategy, practical layout/}).check();
+  await page.getByRole('button',{name:'Save settings',exact:true}).click();
+  await expect(settings.getByText('Rule version 2',{exact:true})).toBeVisible();
+  await settings.getByLabel('Close dialog').click();
+  const response=await page.request.post('/api/bookings',{data:{request:request({name:'Manager confirmation flow',type:'meeting',classification:'meeting',participants:5}),zones:[7],status:'pending'}});expect(response.status()).toBe(201);
+  await page.reload();await page.getByRole('button',{name:/All bookings/}).click();
+  await page.getByRole('button').filter({hasText:'Manager confirmation flow'}).click();
+  const details=page.getByRole('dialog',{name:'Activity details'});
+  await expect(details.getByRole('button',{name:'Confirm booking',exact:true})).toBeEnabled();
+  await details.getByRole('button',{name:'Confirm booking',exact:true}).click();
+  await expect(details.getByText('confirmed',{exact:true})).toBeVisible();
+  await details.getByLabel('Close dialog').click();await page.reload();
+  await page.getByRole('button',{name:/All bookings/}).click();
+  await expect(page.getByRole('button').filter({hasText:'Manager confirmation flow'})).toContainText('confirmed');
+});

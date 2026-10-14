@@ -1,0 +1,251 @@
+Build a working web app called **Community Studio Space Planner** for the Community Studio at Kentish Town Meanwhile, London.
+
+The app should help organisers request space and help studio managers coordinate simultaneous activities. Its main feature must be an interactive floor plan that allocates **whole, adjacent workspace zones**, taking existing bookings into account.
+
+Use these reference PDFs:
+- Community Studio Use and Spatial Plan.pdf
+- 261607_Kentish Town Meanwhile_First Floor Plan.pdf
+
+Read both before implementation. Treat the spatial plan and occupancy analysis as preliminary planning material rather than an approved fire strategy.
+
+**1. Space model and provisional areas**
+
+The studio is approximately 3,600 sq ft / 334.5 m².
+
+Model:
+- Ten flexible workspace zones, numbered 1–10, covering a combined estimated 2,400 sq ft / 222.97 m².
+- A separate fixed dirty workshop, provisionally approximately 900 sq ft / 83.6 m².
+- Any remaining space as unallocated/non-bookable until its purpose and boundaries are confirmed. Do not automatically distribute it among the zones.
+
+Support four activity types:
+- Dirty workshop.
+- Clean workshop.
+- Exhibition.
+- Meeting.
+
+Clean workshop, exhibition and meeting activities share Zones 1–10. Zones are not permanently assigned to one activity type.
+
+Keep the dirty workshop fixed and reserved even when unoccupied. It is not Zone 11 and must never be included in flexible-zone allocations.
+
+Use this provisional zone-area schedule:
+
+| Zone | Estimated sq ft | Estimated m² |
+|---|---:|---:|
+| 1 | 288 | 26.76 |
+| 2 | 288 | 26.76 |
+| 3 | 288 | 26.76 |
+| 4 | 288 | 26.76 |
+| 5 | 288 | 26.76 |
+| 6 | 192 | 17.84 |
+| 7 | 192 | 17.84 |
+| 8 | 192 | 17.84 |
+| 9 | 192 | 17.84 |
+| 10 | 192 | 17.84 |
+| Total | 2,400 | 222.97 |
+
+These are rough estimates based on five approximately equal columns and a 60:40 upper/lower row split in the diagram. They are not surveyed measurements. Use square feet × 0.09290304 internally; round only for display.
+
+Allow administrators to replace these estimates with verified areas later. Keep provisional calculation areas separate from the traced visual geometry.
+
+**2. Zone layout and adjacency**
+
+Reproduce the numbered zones shown in the spatial plan:
+
+| Position | Column 1 | Column 2 | Column 3 | Column 4 | Column 5 |
+|---|---|---|---|---|---|
+| Upper row | 1 | 2 | 3 | 4 | 5 |
+| Lower row | 6 | 7 | 8 | 9 | 10 |
+
+Use these initial adjacency relationships:
+
+| Zone | Adjacent zones |
+|---|---|
+| 1 | 2, 6 |
+| 2 | 1, 3, 7 |
+| 3 | 2, 4, 8 |
+| 4 | 3, 5, 9 |
+| 5 | 4, 10 |
+| 6 | 1, 7 |
+| 7 | 2, 6, 8 |
+| 8 | 3, 7, 9 |
+| 9 | 4, 8, 10 |
+| 10 | 5, 9 |
+
+Adjacent means sharing a usable boundary. Corner-only contact does not count. Allow administrators to disable a connection where a barrier prevents usable continuity.
+
+Every multi-zone allocation must form one connected group through its selected zones. It must not rely on crossing a zone allocated to another activity.
+
+Examples:
+- Zones 4, 5, 9 and 10: valid connected group.
+- Zones 1, 7, 3 and 9: invalid disconnected group.
+
+**3. Whole-zone allocation rules**
+
+The smallest flexible-space allocation is **one complete zone**. The largest is **all ten zones**.
+
+Never:
+- Allocate a fraction of a zone.
+- Subdivide a zone between simultaneous bookings.
+- Allocate disconnected zones to one activity.
+- Count an unbooked zone as a connection through another activity’s footprint.
+
+For automatic allocation:
+1. Identify zones available throughout the requested interval.
+2. Generate connected combinations of available zones.
+3. Calculate each combination’s area and applicable constraints.
+4. Select the smallest sufficient number of zones.
+5. Among equally suitable options, favour configured preferences, compact shapes and less unused area.
+
+Because there are only ten zones, evaluate all possible non-empty zone combinations where practical rather than relying on an opaque placement heuristic.
+
+Support editable preferred allocations:
+- Clean workshop for 20 people: prefer Zones 4, 5, 9 and 10.
+- Meeting for five people: prefer Zone 7.
+
+Preferences must not override existing bookings, area checks or approved limits.
+
+For the 20-person clean-workshop example:
+- Display Zones 4, 5, 9 and 10 as the preferred proposal.
+- Their provisional combined area is 960 sq ft / approximately 89.19 m².
+- If the configured workshop rule requires 100 m², show the area shortfall explicitly.
+- Suggest adding an available adjoining zone, such as Zone 3 or Zone 8, and require acceptance before changing the proposal.
+- Do not silently reduce the area requirement or present the four-zone proposal as meeting that rule.
+
+For a five-person meeting:
+- Allocate the whole of Zone 7 when available and suitable.
+- If unavailable, suggest another suitable single zone before considering a larger allocation.
+
+Let managers manually select zones, with the same connectivity, availability and capacity validation.
+
+**4. Interactive floor plan**
+
+Create a scalable 2D plan using SVG or an equivalent interactive approach.
+
+Trace the actual architectural footprint, walls, columns, openings and obstructions. Overlay the ten zones in their positions from the spatial plan. Do not replace the drawing with a generic rectangular room.
+
+Show:
+- Permanent zone boundaries and numbers.
+- Fixed dirty workshop.
+- Available, booked, proposed and unavailable zones.
+- Existing activities at the selected date/time.
+- Protected circulation and exit locations.
+- Activity labels, headcounts and allocated areas.
+
+Selecting an activity should highlight its full group of zones. Selecting a zone should reveal its area, availability and booking details.
+
+Include zoom, pan, a legend, a linked booking list and accessible labels/patterns alongside colour.
+
+Provide administrator controls for scale calibration, zone boundaries, areas, adjacency, obstructions and protected routes. Changing visual boundaries must not silently overwrite verified or provisional area values.
+
+Whole-zone booking never authorises blocking protected routes within that zone.
+
+**5. Activity request form and scheduling**
+
+Collect:
+- Activity name and course/organisation.
+- Activity type and layout subtype.
+- Participants and additional staff, tutors, technicians or visitors.
+- Start/end dates and times.
+- Setup and pack-down periods.
+- Equipment/furniture requirements.
+- Accessibility and spatial requirements.
+- Optional preferred zones, minimum area and notes.
+
+Use Europe/London time, including daylight-saving changes.
+
+Count everyone present in occupancy. Track physical space reservations separately from people present so installations can reserve zones overnight.
+
+Keep the same zone group reserved throughout an activity, including setup and pack-down. Do not silently move activities between zones.
+
+Check every interval created by relevant booking boundaries for:
+- Zone conflicts.
+- Shared equipment conflicts.
+- Simultaneous occupancy limits.
+- Operational incompatibilities.
+
+Preserve confirmed bookings. Any proposed rearrangement must be shown explicitly and accepted by a manager.
+
+**6. Area and occupancy rules**
+
+Maintain three separate concepts:
+1. Floor-space-factor occupancy estimate.
+2. Practical layout requirements.
+3. Approved operational limits.
+
+Consult current applicable official guidance for England, including Approved Document B Volume 2, the Regulatory Reform (Fire Safety) Order 2005 and relevant fire-risk-assessment guidance. Use any site-specific fire strategy and assessment supplied.
+
+Record source links, editions, sections, effective dates and verification status. Do not apply forthcoming amendments automatically.
+
+Initial reference factors to verify:
+- Workshop: 5.0 m²/person.
+- Meeting/conference room: 1.0 m²/person.
+- Exhibition hall: 1.5 m²/person.
+- Art gallery: 5.0 m²/person.
+
+Require administrator confirmation of the appropriate classification. Do not automatically apply high-density assembly factors to meetings or performances.
+
+Show:
+- Total people.
+- Selected classification and factor.
+- Indicative area requirement.
+- Practical layout requirement.
+- Selected zones and their combined area.
+- Any shortfall or spare area.
+- Applicable approved limits and unresolved checks.
+
+Do not independently round each zone’s capacity and then add those rounded numbers. For a combined activity, calculate from its combined applicable area, then round the resulting planning headcount down.
+
+Keep regulatory area-measurement rules distinct from practical free-floor-area calculations. Avoid double-counting furniture and circulation allowances.
+
+Support approved limits for individual zones, zone combinations, the whole studio, shared escape routes, equipment and operational constraints.
+
+Missing limits must remain unverified. Allow draft planning, but prevent confirmation where required information is missing or a configured blocking constraint fails. Never describe an area-based result as proof of fire compliance.
+
+**7. Interface and workflow**
+
+Provide:
+- Date selector and daily timeline.
+- Large interactive floor plan.
+- Request form beside the plan.
+- Summary showing selected zone numbers, zone count, allocated area and occupancy.
+- Plain-language conflict explanations.
+- Expandable calculations and assumptions.
+- Printable allocation summary.
+
+Clearly distinguish:
+- Fits configured planning constraints.
+- Requires review.
+- Cannot accommodate as requested.
+
+Support draft, pending, confirmed and cancelled bookings. Drafts should not block availability by default; make reservation behaviour explicit for every status.
+
+Managers can configure rules and confirm bookings. Ordinary users can request space and view availability.
+
+When a request cannot be accommodated, suggest validated alternatives: another connected zone group, another time, fewer occupants or a different layout.
+
+**8. Implementation and verification**
+
+Use the existing project stack if present; otherwise choose a maintainable TypeScript web stack.
+
+Separate zone geometry, adjacency, allocation, scheduling and occupancy calculations from interface code. Use deterministic allocation logic.
+
+Persist bookings, selected zone IDs, area assumptions, rule versions and configuration. Keep an audit trail and revalidate affected future bookings when rules or geometry change.
+
+For shared use, validate on the server and prevent simultaneous confirmations from double-booking zones or exceeding shared capacity.
+
+Include labelled demonstration bookings and focused tests proving that:
+- The ten flexible zones total 2,400 sq ft.
+- Zone numbering and adjacency match the supplied plan.
+- The minimum allocation is one zone and maximum is ten.
+- Disconnected selections are rejected.
+- A five-person meeting prefers Zone 7.
+- A 20-person clean workshop proposes Zones 4, 5, 9 and 10 and flags any configured area shortfall.
+- A connected additional zone is suggested where necessary.
+- Unavailable preferred zones trigger valid alternatives.
+- Setup, pack-down and overnight reservations block the relevant zones.
+- Staff and simultaneous occupants are counted.
+- The dirty workshop is excluded from flexible allocation.
+- Saved bookings survive reload.
+- Concurrent confirmation cannot double-book zones.
+
+Build and verify the working app. Provide setup instructions and identify the information needed to replace provisional assumptions before operational use.

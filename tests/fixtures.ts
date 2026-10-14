@@ -1,0 +1,2 @@
+import type {Request} from '../shared/model.ts';
+export function request(patch:Partial<Request>={}):Request {return {name:'Test activity',organisation:'Test',type:'clean',classification:'workshop',layout:'Collaborative tables',participants:20,staff:0,visitors:0,start:'2027-02-01T10:00:00+00:00',end:'2027-02-01T12:00:00+00:00',setup:0,packdown:0,equipment:{},accessibility:'',notes:'',minimumArea:0,practicalArea:0,preferredZones:[],...patch};}
