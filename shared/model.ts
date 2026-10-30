@@ -1,7 +1,7 @@
-export type ActivityType = 'clean' | 'dirty' | 'meeting' | 'exhibition';
+export type ActivityType = 'clean' | 'dirty' | 'meeting' | 'exhibition' | 'screening';
 export type Status = 'draft' | 'pending' | 'confirmed' | 'cancelled';
 export const SQFT_TO_M2 = 0.09290304;
-export const TYPES: Record<ActivityType, string> = { clean: 'Clean workshop', dirty: 'Dirty workshop', meeting: 'Meeting', exhibition: 'Exhibition' };
+export const TYPES: Record<ActivityType, string> = { clean: 'Clean workshop', dirty: 'Dirty workshop', meeting: 'Meeting', exhibition: 'Exhibition', screening: 'Screening' };
 export interface Zone { id: number; sqft: number; areaVerified: boolean; unavailable: boolean; points: string }
 export interface Source { title: string; url: string; edition: string; section: string; effectiveDate: string; verified: boolean; checkedAt: string | null }
 export interface Config {
@@ -28,6 +28,19 @@ export interface Request {
 export interface Booking extends Request {
   id: string; zones: number[]; status: Status; ruleVersion: number; areaAtSave: number;
   createdAt: string; demo: boolean; requiresRevalidation: boolean;
+}
+export interface StorageInput {
+  items: string;
+  startDate: string;
+  endDate: string;
+  organisation?: string;
+}
+export interface StorageRequest extends StorageInput {
+  id: string;
+  organisation: string;
+  status: Status;
+  createdAt: string;
+  reviewRequired: true;
 }
 export interface Issue { code: string; message: string; severity: 'error' | 'review' }
 export interface Evaluation {

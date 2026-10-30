@@ -23,9 +23,13 @@ export function evaluate(r: Request, ids: number[], bookings: Booking[], c: Conf
   const indicativeArea = people * (factor ?? 0), requiredArea = Math.max(indicativeArea, r.minimumArea, r.practicalArea);
   const shortfall = Math.max(0, requiredArea - area);
   if (r.type === 'dirty' && ids.length) add('dirty-zones', 'The fixed dirty workshop cannot use flexible zones.');
+  if (r.type === 'screening') {
+    if (!ids.includes(3) || ids.some(id => ![2,3,4].includes(id))) add('screening-zones', 'Screenings must occupy Zone 3; only Zones 2 and 4 can be added.');
+    if (!Object.entries(r.equipment).some(([name, quantity]) => ['screen','projector'].includes(name.trim().toLowerCase()) && quantity > 0)) add('screening-equipment', 'A screening requires a screen or projector.');
+  }
   if (r.type !== 'dirty' && !connected(ids, c)) add('disconnected', 'Select one connected group of whole zones; corner contact does not connect zones.');
   if (ids.some(id => c.zones.find(z => z.id === id)?.unavailable)) add('unavailable', 'One or more selected zones are unavailable.');
-  if (shortfall > 0.00001) add('area', `The selected space is ${shortfall.toFixed(2)} m² short of the ${requiredArea.toFixed(2)} m² planning requirement.`);
+  if (shortfall > 0.00001) add('area', `The selected space is ${shortfall < 1 ? 'less than 1' : Math.round(shortfall)} m² short of the ${Math.round(requiredArea)} m² planning requirement.`);
   if (!factor) add('classification', 'Choose a configured activity classification.');
   const active = bookings.filter(b => b.id !== excludeId && c.reserveStatuses.includes(b.status));
   const simultaneous = active.filter(b => overlaps(reservation(r), reservation(b)));
@@ -74,10 +78,13 @@ export function propose(r: Request, bookings: Booking[], c: Config, excludeId?: 
   const available = c.zones.filter(z => !z.unavailable && !active.some(b => b.zones.includes(z.id))).map(z => z.id);
   if (r.type === 'dirty') return { selected: evaluate(r, [], bookings, c, excludeId), alternatives: [], preferred: false, available };
   const configured = c.preferences.find(p => p.type === r.type && p.people === totalPeople(r))?.zones || [];
-  const preferred = r.preferredZones.length ? r.preferredZones : configured;
+  const preference = r.preferredZones.length ? r.preferredZones : configured;
+  // A preference cannot relax screening's fixed footprint rule.
+  const preferred = r.type === 'screening' && (!preference.includes(3) || preference.some(id=>![2,3,4].includes(id))) ? [] : preference;
   const candidates: Evaluation[] = [];
   for (let mask = 1; mask < 1 << 10; mask++) {
     const ids = c.zones.filter((_, i) => mask & (1 << i)).map(z => z.id);
+    if (r.type === 'screening' && (!ids.includes(3) || ids.some(id=>![2,3,4].includes(id)))) continue;
     if (!ids.every(id => available.includes(id)) || !connected(ids, c)) continue;
     const value = evaluate(r, ids, bookings, c, excludeId);
     if (!value.issues.some(i => i.severity === 'error')) candidates.push(value);
@@ -90,7 +97,10 @@ export function propose(r: Request, bookings: Booking[], c: Config, excludeId?: 
     const smallestExtensions = extensions.filter(v => v.zones.length === extensions[0]?.zones.length);
     return { selected, alternatives: (selected.shortfall > 0 && smallestExtensions.length ? smallestExtensions : candidates.filter(v => v.zones.join(',') !== preferred.join(','))).slice(0,3), preferred: true, available };
   }
-  const selected = candidates[0] ?? evaluate(r, available, bookings, c, excludeId);
+  // Keep the required screening location visible even when it is unavailable;
+  // the evaluation then explains the conflict instead of suggesting another room.
+  const unavailableSelection = r.type === 'screening' ? [3] : available;
+  const selected = candidates[0] ?? evaluate(r, unavailableSelection, bookings, c, excludeId);
   return { selected, alternatives: candidates.slice(1,4), preferred: false, available };
 }
 
@@ -100,12 +110,12 @@ export function findFallbacks(r: Request, bookings: Booking[], c: Config): Fallb
   const results: Fallback[]=[];
   const valid=(p:Proposal)=>[p.selected,...p.alternatives].find(v=>!v.issues.some(i=>i.severity==='error'));
   const available=propose(r,bookings,c).available;
-  const availableArea=r.type==='dirty'?900*.09290304:zoneArea(available,c);
+  const availableArea=r.type==='dirty'?900*.09290304:zoneArea(r.type==='screening'?available.filter(id=>[2,3,4].includes(id)):available,c);
   const max=Math.min(r.participants-1,Math.floor(availableArea/(c.factors[r.classification]||1))-r.staff-r.visitors);
   for(let participants=max;participants>=1;participants--) {
     const next={...r,participants,preferredZones:[]};
     const found=valid(propose(next,bookings,c));
-    if(found){results.push({label:`Try ${participants} participants`,description:`${participants+r.staff+r.visitors} people including staff and visitors · ${found.area.toFixed(2)} m²`,request:next,zones:found.zones});break;}
+    if(found){results.push({label:`Try ${participants} participants`,description:`${participants+r.staff+r.visitors} people including staff and visitors · ${Math.round(found.area)} m²`,request:next,zones:found.zones});break;}
   }
   const required=Math.max(totalPeople(r)*(c.factors[r.classification]||0),r.minimumArea,r.practicalArea);
   if(required<=(r.type==='dirty'?900*.09290304:zoneArea(c.zones.filter(z=>!z.unavailable).map(z=>z.id),c))) {
@@ -113,7 +123,7 @@ export function findFallbacks(r: Request, bookings: Booking[], c: Config): Fallb
       const shift=(iso:string)=>DateTime.fromISO(iso).setZone('Europe/London').plus(hours>=24?{days:hours/24}:{hours}).toISO()!;
       const next={...r,start:shift(r.start),end:shift(r.end),attendanceStart:r.attendanceStart?shift(r.attendanceStart):undefined,attendanceEnd:r.attendanceEnd?shift(r.attendanceEnd):undefined};
       const found=valid(propose(next,bookings,c));
-      if(found){results.push({label:`Try ${DateTime.fromISO(next.start).setZone('Europe/London').toFormat('ccc d LLL, HH:mm')}`,description:`Same headcount and layout · ${found.area.toFixed(2)} m² · London time`,request:next,zones:found.zones});break;}
+      if(found){results.push({label:`Try ${DateTime.fromISO(next.start).setZone('Europe/London').toFormat('ccc d LLL, HH:mm')}`,description:`Same headcount · ${Math.round(found.area)} m² · London time`,request:next,zones:found.zones});break;}
     }
   }
   return results;

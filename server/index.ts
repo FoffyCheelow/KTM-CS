@@ -4,7 +4,7 @@ import { randomBytes, timingSafeEqual, scryptSync } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Store, BookingError } from './store.ts';
-import { bookingSchema, configSchema, proposalSchema, statusSchema } from './schema.ts';
+import { bookingSchema, configSchema, proposalSchema, statusSchema, storageCreateSchema } from './schema.ts';
 import { evaluate, propose } from '../shared/engine.ts';
 import { z } from 'zod';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -31,7 +31,7 @@ const token=(req:express.Request)=>req.headers.cookie?.split(';').map(c=>c.trim(
 const isManager=(req:express.Request)=> (sessions.get(token(req)) || 0)>Date.now();
 const manager:express.RequestHandler=(req,res,next)=>isManager(req)?next():res.status(403).json({error:'Sign in as a manager to perform this action.'});
 app.get('/api/health',(_req,res)=>res.json({ok:true}));
-app.get('/api/state',(req,res)=>res.json({config:store.config(),bookings:store.bookings(),manager:isManager(req)}));
+app.get('/api/state',(req,res)=>res.json({config:store.config(),bookings:store.bookings(),storageRequests:store.storageRequests(),manager:isManager(req)}));
 app.post('/api/login',(req,res)=> {
   const key=req.ip || 'local', current=attempts.get(key);
   if(current && current.until>Date.now() && current.count>=5) return res.status(429).json({error:'Too many attempts. Try again in 15 minutes.'});
@@ -46,6 +46,8 @@ app.post('/api/logout',(req,res)=>{sessions.delete(token(req));res.clearCookie('
 app.post('/api/propose',(req,res)=>{const {request,zones}=proposalSchema.parse(req.body);const config=store.config(),bookings=store.bookings();const proposal=propose(request,bookings,config);if(zones!==undefined) proposal.selected=evaluate(request,zones,bookings,config);res.json(proposal);});
 app.post('/api/bookings',(req,res)=> {const {request,zones,status}=bookingSchema.parse(req.body);res.status(201).json(store.create(request,zones,status,isManager(req)));});
 app.post('/api/bookings/:id/status',manager,(req,res)=>res.json(store.changeStatus(String(req.params.id),statusSchema.parse(req.body.status))));
+app.post('/api/storage',(req,res)=>{const {status,...request}=storageCreateSchema.parse(req.body);res.status(201).json(store.createStorage(request,status,isManager(req)));});
+app.post('/api/storage/:id/status',manager,(req,res)=>res.json(store.changeStorageStatus(String(req.params.id),statusSchema.parse(req.body.status))));
 app.put('/api/config',manager,(req,res)=>res.json(store.updateConfig(configSchema.parse(req.body))));
 app.get('/api/audit',manager,(_req,res)=>res.json(store.audit()));
 app.use('/api',(_req,res)=>res.status(404).json({error:'API route not found.'}));

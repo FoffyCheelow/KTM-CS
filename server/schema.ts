@@ -1,12 +1,14 @@
 import { z } from 'zod';
+import { DateTime } from 'luxon';
+import { ZONE } from '../shared/time.ts';
 const id = z.number().int().min(1).max(10);
 const ids = z.array(id).max(10).refine(v => new Set(v).size === v.length, 'Zone IDs must be unique.');
 const count = z.number().int().min(0).max(10000);
 const text = z.string().max(5000);
 const instant = z.iso.datetime({offset: true});
-const activity = z.enum(['clean', 'dirty', 'meeting', 'exhibition']);
+const activity = z.enum(['clean', 'dirty', 'meeting', 'exhibition', 'screening']);
 export const statusSchema = z.enum(['draft','pending','confirmed','cancelled']);
-export const requestSchema = z.object({
+const requestObject = z.object({
   name: z.string().trim().min(1).max(160), organisation: z.string().max(200), type: activity,
   classification: z.enum(['workshop','meeting','exhibition','gallery']), layout: z.string().max(120),
   participants: count, staff: count, visitors: count, start: instant, end: instant,
@@ -23,10 +25,38 @@ export const requestSchema = z.object({
   if (r.attendanceStart && r.attendanceEnd && (Date.parse(r.attendanceStart) < Date.parse(r.start) - r.setup*60000 || Date.parse(r.attendanceEnd) > Date.parse(r.end) + r.packdown*60000 || Date.parse(r.attendanceEnd) <= Date.parse(r.attendanceStart))) fail('Attendance must be within the reservation (including setup and pack-down), with an end after its start.');
   if ((r.type === 'clean' || r.type === 'dirty') && r.classification !== 'workshop') fail('Workshop activities must use the workshop classification.');
   if (r.type === 'meeting' && r.classification !== 'meeting') fail('Meetings must use the meeting classification.');
+  if (r.type === 'screening' && r.classification !== 'meeting') fail('Screenings use the configured meeting classification.');
   if (r.type === 'exhibition' && !['exhibition','gallery'].includes(r.classification)) fail('Exhibitions must use exhibition or art gallery classification.');
 });
+// The simplified request UI omits these fields, while legacy bookings and
+// manager-configured rules retain their original values and validation.
+export const requestSchema = z.preprocess(input => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+  const value = input as Record<string, unknown>;
+  const classification = value.type === 'clean' || value.type === 'dirty' ? 'workshop' : value.type === 'exhibition' ? 'exhibition' : 'meeting';
+  return {
+    organisation: '', classification, layout: 'Default', staff: 0, visitors: 0,
+    setup: 0, packdown: 0, equipment: value.type === 'screening' ? {Projector: 1} : {},
+    accessibility: '', notes: '', minimumArea: 0, practicalArea: 0, preferredZones: [],
+    ...value
+  };
+}, requestObject);
 export const proposalSchema = z.object({request: requestSchema, zones: ids.optional()});
 export const bookingSchema = z.object({request: requestSchema, zones: ids, status: statusSchema});
+export const storageInputSchema = z.object({
+  items: z.string().trim().min(1, 'Describe the items to store.').max(5000),
+  organisation: z.string().trim().max(200).optional().default(''),
+  startDate: z.iso.date(),
+  endDate: z.iso.date()
+}).superRefine((request, ctx) => {
+  const start = DateTime.fromISO(request.startDate, {zone: ZONE});
+  const end = DateTime.fromISO(request.endDate, {zone: ZONE});
+  const fail = (message: string) => ctx.addIssue({code: 'custom', message});
+  if (!start.isValid || !end.isValid || start.toISODate() !== request.startDate || end.toISODate() !== request.endDate) fail('Choose valid calendar dates.');
+  else if (end < start) fail('The storage end date must be on or after its start date.');
+  else if (end.diff(start, 'days').days > 366) fail('Storage requests may span at most one year.');
+});
+export const storageCreateSchema = storageInputSchema.safeExtend({status: statusSchema.default('pending')});
 export const configSchema = z.object({
   version: z.number().int().positive(),
   zones: z.array(z.object({ id, sqft: z.number().positive().max(10000), areaVerified: z.boolean(), unavailable: z.boolean(), points: z.string().regex(/^[\d.,\s-]+$/).min(10).max(2000) })).length(10).refine(zones => zones.every((z,i) => z.id === i+1), 'Keep all ten zones, numbered 1–10 in order.'),

@@ -8,3 +8,12 @@ export function localToISO(value: string, occurrence: 'earlier' | 'later' = 'ear
 }
 export function localNow() { return DateTime.now().setZone(ZONE); }
 export function formatTime(iso: string) {return DateTime.fromISO(iso).setZone(ZONE).toFormat('HH:mm');}
+
+// Date-only storage ranges include both named dates, with midnight boundaries
+// in London rather than a fixed 24-hour duration across a clock change.
+export function storageInterval(startDate: string, endDate: string): [number, number] {
+  const start = DateTime.fromISO(startDate, {zone: ZONE}).startOf('day');
+  const end = DateTime.fromISO(endDate, {zone: ZONE}).plus({days: 1}).startOf('day');
+  if (!start.isValid || !end.isValid || end.toMillis() <= start.toMillis()) throw new Error('Choose a valid storage date range.');
+  return [start.toMillis(), end.toMillis()];
+}

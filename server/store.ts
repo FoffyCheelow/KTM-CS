@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
-import { defaultConfig, zoneArea, type Booking, type Config, type Request, type Status } from '../shared/model.ts';
+import { defaultConfig, zoneArea, type Booking, type Config, type Request, type Status, type StorageInput, type StorageRequest } from '../shared/model.ts';
+import { storageInputSchema } from './schema.ts';
 import { evaluate } from '../shared/engine.ts';
 import { localToISO, localNow } from '../shared/time.ts';
 export class BookingError extends Error { constructor(message: string, public details?: unknown, public code = 409) {super(message);} }
@@ -8,12 +9,13 @@ export class Store {
   db: DatabaseSync;
   constructor(path: string, seed = true) {
     this.db = new DatabaseSync(path);
-    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS config(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS bookings(id TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, action TEXT NOT NULL, data TEXT NOT NULL);');
+    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS config(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS bookings(id TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS storage_requests(id TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, action TEXT NOT NULL, data TEXT NOT NULL);');
     const exists = this.db.prepare('SELECT data FROM config WHERE id=1').get();
     if (!exists) { this.db.prepare('INSERT INTO config VALUES(1,?)').run(JSON.stringify(defaultConfig())); if(seed) this.seed(); }
   }
   config(): Config { return JSON.parse((this.db.prepare('SELECT data FROM config WHERE id=1').get() as {data:string}).data); }
   bookings(): Booking[] {return (this.db.prepare('SELECT data FROM bookings ORDER BY rowid DESC').all() as {data:string}[]).map(r => JSON.parse(r.data));}
+  storageRequests(): StorageRequest[] {return (this.db.prepare('SELECT data FROM storage_requests ORDER BY rowid DESC').all() as {data:string}[]).map(r => JSON.parse(r.data));}
   audit() {return this.db.prepare('SELECT * FROM audit ORDER BY id DESC LIMIT 150').all();}
   log(action: string, data: unknown) {this.db.prepare('INSERT INTO audit(timestamp,action,data) VALUES(?,?,?)').run(new Date().toISOString(),action,JSON.stringify(data));}
   transaction<T>(fn: () => T): T {this.db.exec('BEGIN IMMEDIATE'); try {const result=fn(); this.db.exec('COMMIT'); return result;} catch(e) {this.db.exec('ROLLBACK'); throw e;}}
@@ -24,10 +26,33 @@ export class Store {
       const c = this.config(), result = evaluate(r,zones,this.bookings(),c);
       if (r.type !== 'dirty' && result.issues.some(i=>i.code==='disconnected')) throw new BookingError('A booking must select one connected group of complete zones.',result);
       if (r.type === 'dirty' && zones.length) throw new BookingError('Dirty workshop reservations cannot include flexible zones.',result);
+      if (r.type === 'screening' && result.issues.some(i=>i.code==='screening-zones')) throw new BookingError('Screenings must occupy Zone 3; only Zones 2 and 4 can be added.',result);
       if (status === 'confirmed' && !result.canConfirm) throw new BookingError('Confirmation is blocked by unresolved checks.',result);
       if (c.reserveStatuses.includes(status) && result.issues.some(i=>i.severity==='error')) throw new BookingError('Resolve planning conflicts before requesting a space reservation. You can save a draft.',result);
       const b: Booking = {...r, zones, status, id:randomUUID(), createdAt:new Date().toISOString(),ruleVersion:c.version,areaAtSave:result.area,demo:false,requiresRevalidation:false};
       this.put(b); this.log('booking.created',{id:b.id,name:b.name,status,zones,ruleVersion:c.version,area:result.area}); return b;
+    });
+  }
+  createStorage(input: StorageInput, status: Status, manager: boolean): StorageRequest {
+    const request = storageInputSchema.parse(input);
+    if ((status === 'confirmed' || status === 'cancelled') && !manager) throw new BookingError('Manager access is required.',undefined,403);
+    if (status === 'confirmed') throw new BookingError('Storage provision and capacity are unverified. Requests require review and cannot be confirmed yet.');
+    return this.transaction(() => {
+      const value: StorageRequest = {...request, id: randomUUID(), status, createdAt: new Date().toISOString(), reviewRequired: true};
+      this.db.prepare('INSERT INTO storage_requests VALUES(?,?)').run(value.id,JSON.stringify(value));
+      this.log('storage.created',{id:value.id,items:value.items,startDate:value.startDate,endDate:value.endDate,status});
+      return value;
+    });
+  }
+  changeStorageStatus(id: string, status: Status): StorageRequest {
+    return this.transaction(() => {
+      const value = this.storageRequests().find(request=>request.id===id);
+      if (!value) throw new BookingError('Storage request not found.',undefined,404);
+      if (status === 'confirmed') throw new BookingError('Storage provision and capacity are unverified. Requests require review and cannot be confirmed yet.');
+      const next: StorageRequest = {...value,status,reviewRequired:true};
+      this.db.prepare('UPDATE storage_requests SET data=? WHERE id=?').run(JSON.stringify(next),id);
+      this.log('storage.status',{id,from:value.status,to:status});
+      return next;
     });
   }
   changeStatus(id: string, status: Status): Booking {

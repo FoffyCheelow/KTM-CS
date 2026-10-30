@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {defaultConfig, SQFT_TO_M2, zoneArea, type Request, type Booking} from '../shared/model.ts';
 import {connected,evaluate,propose,findFallbacks} from '../shared/engine.ts';
-import {localToISO} from '../shared/time.ts';
+import {localToISO, storageInterval} from '../shared/time.ts';
 export function request(patch:Partial<Request>={}):Request {return {name:'Test activity',organisation:'Test',type:'clean',classification:'workshop',layout:'Collaborative tables',participants:20,staff:0,visitors:0,start:'2027-02-01T10:00:00+00:00',end:'2027-02-01T12:00:00+00:00',setup:0,packdown:0,equipment:{},accessibility:'',notes:'',minimumArea:0,practicalArea:0,preferredZones:[],...patch};}
 function booking(patch:Partial<Booking>={}):Booking {return {...request(),id:'other',zones:[7],participants:2,type:'meeting',classification:'meeting',status:'pending',ruleVersion:1,areaAtSave:17.83,createdAt:'2027-01-01T00:00:00Z',demo:false,requiresRevalidation:false,...patch};}
 test('ten zones total exactly 2400 sq ft and use an unrounded conversion',()=> {const c=defaultConfig();assert.equal(c.zones.reduce((n,z)=>n+z.sqft,0),2400);assert.ok(Math.abs(zoneArea(c.zones.map(z=>z.id),c)-2400*SQFT_TO_M2)<1e-10);assert.deepEqual(c.zones.map(z=>z.id),[1,2,3,4,5,6,7,8,9,10]);});
@@ -25,3 +25,35 @@ test('combined headcount rounds only after summing unrounded areas',()=>{const r
 test('Europe/London conversion rejects nonexistent times and distinguishes repeated times',()=>{assert.throws(()=>localToISO('2027-03-28T01:30'),/does not exist/);assert.equal(localToISO('2027-10-31T01:30','earlier'),'2027-10-31T01:30:00.000+01:00');assert.equal(localToISO('2027-10-31T01:30','later'),'2027-10-31T01:30:00.000+00:00');assert.equal(localToISO('2027-07-01T10:00'),'2027-07-01T10:00:00.000+01:00');});
 test('headcount and time alternatives are validated by the same allocation rules',()=>{const c=defaultConfig();const r=request({participants:100});const fallback=findFallbacks(r,[],c).find(f=>f.request.participants<100);assert.ok(fallback);assert.equal(evaluate(fallback.request,fallback.zones,[],c).issues.some(i=>i.severity==='error'),false);const occupied=booking({zones:[1,2,3,4,5,6,7,8,9,10]});const nextTime=findFallbacks(request({type:'meeting',classification:'meeting',participants:5}),[occupied],c).find(f=>f.request.start!==r.start);assert.ok(nextTime);assert.equal(evaluate(nextTime.request,nextTime.zones,[occupied],c).issues.some(i=>i.severity==='error'),false);});
 test('default attendance includes setup and packdown for conservative occupancy checks',()=>{const c=defaultConfig();c.wholeStudioLimit=5;const b=booking({participants:5,setup:30});const e=evaluate(request({type:'meeting',classification:'meeting',participants:1,start:'2027-02-01T09:40:00Z',end:'2027-02-01T09:50:00Z'}),[6],[b],c);assert.ok(e.issues.some(i=>i.code==='studio-limit'));});
+test('screenings always select Zone 3 and expand only into Zones 2 and 4',()=>{
+  const c=defaultConfig(),r=request({type:'screening',classification:'meeting',participants:20,equipment:{Projector:1}});
+  assert.deepEqual(propose(r,[],c).selected.zones,[3]);
+  for(const count of [40,70]) {
+    const selected=propose({...r,participants:count},[],c).selected;
+    assert.ok(selected.zones.includes(3));
+    assert.ok(selected.zones.every(id=>[2,3,4].includes(id)));
+    assert.equal(selected.issues.some(i=>i.severity==='error'),false);
+  }
+  for(const zones of [[2],[4],[3,8],[1,2,3]]) assert.ok(evaluate(r,zones,[],c).issues.some(i=>i.code==='screening-zones'));
+  assert.deepEqual(propose({...r,preferredZones:[4]},[],c).selected.zones,[3]);
+});
+test('screening equipment is mandatory and shared projector conflicts are checked',()=>{
+  const c=defaultConfig(),r=request({type:'screening',classification:'meeting',participants:10});
+  assert.ok(evaluate(r,[3],[],c).issues.some(i=>i.code==='screening-equipment'));
+  c.equipment.Screen=1;
+  assert.ok(!evaluate({...r,equipment:{Screen:1}},[3],[],c).issues.some(i=>i.code==='screening-equipment'));
+  const b=booking({zones:[7],equipment:{Projector:1}});
+  assert.ok(evaluate({...r,equipment:{Projector:1}},[3],[b],c).issues.some(i=>i.code==='equipment'));
+});
+test('an occupied or unavailable Zone 3 never causes screening relocation',()=>{
+  const c=defaultConfig(),r=request({type:'screening',classification:'meeting',participants:5,equipment:{Projector:1}});
+  const conflict=propose(r,[booking({zones:[3]})],c);
+  assert.deepEqual(conflict.selected.zones,[3]);assert.equal(conflict.selected.outcome,'cannot');assert.equal(conflict.alternatives.length,0);
+  c.zones[2].unavailable=true;
+  assert.deepEqual(propose(r,[],c).selected.zones,[3]);assert.ok(propose(r,[],c).selected.issues.some(i=>i.code==='unavailable'));
+});
+test('storage date ranges include the end date and follow London clock changes',()=>{
+  const spring=storageInterval('2027-03-28','2027-03-28');assert.equal((spring[1]-spring[0])/3600000,23);
+  const autumn=storageInterval('2026-10-25','2026-10-25');assert.equal((autumn[1]-autumn[0])/3600000,25);
+  const multi=storageInterval('2027-02-01','2027-02-03');assert.equal((multi[1]-multi[0])/3600000,72);
+});
